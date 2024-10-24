@@ -74,7 +74,7 @@ def save_fig(rgb, depth, top_down_map, folder_name, eps, step):
 def top_down():
     # Create habitat config
     config = habitat.get_config(
-        config_path="./pointnav.yaml"
+        config_path="./config/pointnav.yaml"
         # config_path="benchmark/nav/pointnav/pointnav_habitat_test.yaml"
     )
 

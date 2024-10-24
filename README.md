@@ -14,5 +14,5 @@
 
 3. Download dataset
     ```
-    python -m habitat_sim.utils.datasets_download --uids replica_cad_dataset replica_cad_baked_lighting --data-path ./dataset/
+    python -m habitat_sim.utils.datasets_download --uids replica_cad_dataset replica_cad_baked_lighting --data-path ./data/
     ```

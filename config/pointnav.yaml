@@ -26,6 +26,6 @@ habitat:
     type: PointNav-v1
     split: train
     scenes_dir: ""
-    content_scenes: 
+    content_scenes:
     - "*"
-    data_path: pointnav/replica_cad_baked.json.gz
+    data_path: pointnav/{split}/{split}_replica_cad_baked_lighting.json.gz

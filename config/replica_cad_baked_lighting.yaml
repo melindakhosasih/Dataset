@@ -7,6 +7,9 @@ defaults:
 habitat:
   seed: 500
   environment:
+    iterator_options:
+      cycle: False
+      shuffle: False
     max_episode_steps: 500
   task:
     measurements:

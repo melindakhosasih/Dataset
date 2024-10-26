@@ -46,11 +46,12 @@ def generate_pointnav(args):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config_path", type=str, default="./config/pointnav.yaml")
+    parser.add_argument("--config_path", type=str, default="./config/{dataset_name}.yaml")
     parser.add_argument("--data_path", type=str, default="pointnav/{dataset_name}/{split}/{split}.json.gz")
     parser.add_argument("--dataset_name", type=str, default="replica_cad_baked_lighting")
     parser.add_argument("--scene_paths", type=str, default="./data/{dataset_name}/stages/*.glb")
     args = parser.parse_args()
+    args.config_path = args.config_path.format(dataset_name=args.dataset_name)
     args.scene_paths = args.scene_paths.format(dataset_name=args.dataset_name)
     return args
 

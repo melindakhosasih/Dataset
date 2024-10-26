@@ -28,4 +28,4 @@ habitat:
     scenes_dir: ""
     content_scenes:
     - "*"
-    data_path: pointnav/{split}/{split}_replica_cad_baked_lighting.json.gz
+    data_path: pointnav/replica_cad_baked_lighting/{split}/{split}.json.gz

@@ -10,7 +10,7 @@ import pointnav_generator
 
 def generate_pointnav(args):
     config = habitat.get_config(config_path=args.config_path)
-    for type, n_epi, seed in zip(["train", "val", "test"], [40, 2, 2], [500, 1000, 1500]):
+    for type, n_epi, seed in zip(["train", "val", "test"], [50, 5, 5], [500, 1000, 1500]):
         data_path = args.data_path.format(split=type, dataset_name=args.dataset_name)
         os.makedirs(os.path.dirname(data_path), exist_ok=True)
 
@@ -34,7 +34,7 @@ def generate_pointnav(args):
                 )
                 for episode in generator:
                     episodes.append(episode)
-                
+
         dataset: habitat.Dataset = habitat.Dataset()
         dataset.episodes = episodes
         assert (
@@ -47,7 +47,7 @@ def generate_pointnav(args):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config_path", type=str, default="./config/pointnav.yaml")
-    parser.add_argument("--data_path", type=str, default="pointnav/{split}/{split}_{dataset_name}.json.gz")
+    parser.add_argument("--data_path", type=str, default="pointnav/{dataset_name}/{split}/{split}.json.gz")
     parser.add_argument("--dataset_name", type=str, default="replica_cad_baked_lighting")
     parser.add_argument("--scene_paths", type=str, default="./data/{dataset_name}/stages/*.glb")
     args = parser.parse_args()

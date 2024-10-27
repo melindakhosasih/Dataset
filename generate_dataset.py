@@ -1,7 +1,8 @@
 # [setup]
 import os
-import json
+import argparse
 from typing import TYPE_CHECKING, Union, cast
+from tqdm import tqdm
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,16 +14,15 @@ from habitat.config.default_structured_configs import (
     TopDownMapMeasurementConfig,
 )
 from habitat.core.agent import Agent
-from habitat.tasks.nav.nav import NavigationEpisode, NavigationGoal
+from habitat.tasks.nav.nav import NavigationEpisode
 from habitat.tasks.nav.shortest_path_follower import ShortestPathFollower
 from habitat.utils.visualizations import maps
-from habitat_sim.utils.common import quat_to_angle_axis, quat_to_coeffs
+from habitat_sim.utils.common import quat_to_coeffs
 from habitat.utils.visualizations.utils import (
     images_to_video,
     observations_to_image,
     overlay_frame,
 )
-from habitat_sim.utils import viz_utils as vut
 
 # Quiet the Habitat simulator logging
 os.environ["MAGNUM_LOG"] = "quiet"
@@ -32,12 +32,6 @@ if TYPE_CHECKING:
     from habitat.core.simulator import Observations
     from habitat.sims.habitat_simulator.habitat_simulator import HabitatSim
 
-
-output_dir = "dataset/replica_cad_baked"
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
-# [/setup]
-    
 # [example_4]
 class ShortestPathFollowerAgent(Agent):
     r"""Implementation of the :ref:`habitat.core.agent.Agent` interface that
@@ -61,21 +55,13 @@ class ShortestPathFollowerAgent(Agent):
     def reset(self) -> None:
         pass
 
-def save_fig(rgb, depth, top_down_map, folder_name, eps, step):
-    path = f"./dataset/replica_cad_baked/{folder_name}/{eps}/{str(step).zfill(3)}"
-    if not os.path.exists(path):
-        os.makedirs(path)
-
-    plt.axis("off")
-    plt.imsave(f"{path}/rgb.png", rgb)
-    plt.imsave(f"{path}/depth.png", depth.squeeze(), cmap="gray")
-    plt.imsave(f"{path}/top_down_map.png", top_down_map)
-
-def top_down():
+def generate_dataset(args, type="train", n_epi=50):
+    save_dir = args.save_dir.format(split=type, dataset_name=args.dataset_name)
+    os.makedirs(save_dir, exist_ok=True)
+    
     # Create habitat config
     config = habitat.get_config(
-        config_path="./config/pointnav.yaml"
-        # config_path="benchmark/nav/pointnav/pointnav_habitat_test.yaml"
+        config_path=args.config_path
     )
 
     # Add habitat.tasks.nav.nav.TopDownMap and habitat.tasks.nav.nav.Collisions measures
@@ -105,6 +91,7 @@ def top_down():
     dataset = habitat.make_dataset(
         id_dataset=config.habitat.dataset.type, config=config.habitat.dataset
     )
+
     # Create simulation environment
     with habitat.Env(config=config, dataset=dataset) as env:
         # Create ShortestPathFollowerAgent agent
@@ -112,35 +99,38 @@ def top_down():
             env=env,
             goal_radius=config.habitat.task.measurements.success.success_distance,
         )
-        # Create video of agent navigating in the first episode
-        num_episodes = 5
-        for eps in range(num_episodes):
-            step = 0
-            stored_info = {
-                "step": []
-            }
-            current_episode = env.current_episode
-            # Load the first episode and reset agent
-            observations = env.reset()
-            agent.reset()
 
-            # Get metrics
+        for epi in tqdm(range(env.number_of_episodes)):
+            # Load the first episode and reset agent
+            obs = env.reset()
+            agent.reset()
+            current_episode = env.current_episode
+
+            assert epi % n_epi == int(current_episode.episode_id), (
+                f"Episode {epi % n_epi} doesn't match with current epi {current_episode.episode_id}"
+            )
+
+            step = 0
+            scene_name, _ = os.path.splitext(os.path.basename(current_episode.scene_id))
+            save_name = f"{scene_name}_{current_episode.episode_id.zfill(len(str(n_epi)))}"
+            scene_info = {
+                "rgb": [],
+                "depth": [],
+                "action": [],
+                "pos": [],
+                "rot": [],
+                "topdown": [],
+            }
+
+            # # Get metrics
             info = env.get_metrics()
             # Concatenate RGB-D observation and topdowm map into one image
-            frame = observations_to_image(observations, info)
+            frame = observations_to_image(obs, info)
+
             if "top_down_map" in info:
                 top_down_map = maps.colorize_draw_agent_and_fit_to_height(
-                    info["top_down_map"], observations["rgb"].shape[0]
+                    info["top_down_map"], obs["rgb"].shape[0]
                 )
-
-            save_fig(
-                observations["rgb"],
-                observations["depth"],
-                top_down_map,
-                os.path.basename(current_episode.scene_id),
-                eps,
-                step
-            )
 
             # Remove top_down_map from metrics
             info.pop("top_down_map")
@@ -152,54 +142,61 @@ def top_down():
             # Repeat the steps above while agent doesn't reach the goal
             while not env.episode_over:
                 # Get the next best action
-                action = agent.act(observations)
+                action = agent.act(obs)
                 if action is None:
-                    step += 1
                     break
-                
-                stored_info["step"].append({
-                    "action": action,
-                    "agent_position": env.sim.get_agent_state().position.tolist(),  # in world space
-                    "agent_rotation": quat_to_coeffs(env.sim.get_agent_state().rotation).tolist() # in world space
-                })
+
+                scene_info["rgb"].append(obs["rgb"])
+                scene_info["depth"].append(obs["depth"])
+                scene_info["action"].append(action)
+                scene_info["pos"].append(env.sim.get_agent_state().position.tolist())
+                scene_info["rot"].append(quat_to_coeffs(env.sim.get_agent_state().rotation).tolist())
+                scene_info["topdown"].append(top_down_map)
 
                 # Step in the environment
-                observations = env.step(action)
+                obs = env.step(action)
                 info = env.get_metrics()
-                frame = observations_to_image(observations, info)
+                frame = observations_to_image(obs, info)
+
                 if "top_down_map" in info:
                     top_down_map = maps.colorize_draw_agent_and_fit_to_height(
-                        info["top_down_map"], observations["rgb"].shape[0]
+                        info["top_down_map"], obs["rgb"].shape[0]
                     )
-
-                save_fig(
-                    observations["rgb"],
-                    observations["depth"],
-                    top_down_map,
-                    os.path.basename(current_episode.scene_id),
-                    eps,
-                    step
-                )
 
                 info.pop("top_down_map")
                 frame = overlay_frame(frame, info)
                 vis_frames.append(frame)
 
                 step += 1
-
-            video_name = f"{os.path.basename(current_episode.scene_id)}_{current_episode.episode_id}"
-            output_path = f"{output_dir}/{os.path.basename(current_episode.scene_id)}/{eps}/"
             
-            with open(f"{output_path}info.json", "w") as json_file:
-                json.dump(stored_info, json_file)
+            scene_info["rgb"] = np.array(scene_info["rgb"])
+            scene_info["depth"] = np.array(scene_info["depth"])
+            scene_info["action"] = np.array(scene_info["action"])
+            scene_info["pos"] = np.array(scene_info["pos"])
+            scene_info["rot"] = np.array(scene_info["rot"])
+            scene_info["topdown"] = np.array(scene_info["topdown"])
+
+            np.savez_compressed(
+                os.path.join(save_dir, f"{save_name}.npz"),
+                **scene_info
+            )
 
             # Create video from images and save to disk
             images_to_video(
-                vis_frames, output_path, video_name, fps=6, quality=9
+                vis_frames, save_dir, save_name, fps=6, quality=9
             )
             vis_frames.clear()
-            # Display video
-            # vut.display_video(f"{output_path}/{video_name}.mp4")
-            
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config_path", type=str, default="./config/{dataset_name}.yaml")
+    parser.add_argument("--dataset_name", type=str, default="replica_cad_baked_lighting")
+    parser.add_argument("--save_dir", type=str, default="dataset/{dataset_name}/{split}/")
+    args = parser.parse_args()
+    args.config_path = args.config_path.format(dataset_name=args.dataset_name)
+    return args
+
 if __name__ == "__main__":
-    top_down()
+    args = parse_args()
+    for type, n_epi in zip(["train", "val", "test"], [50, 5, 5]):
+        generate_dataset(args, type, n_epi)

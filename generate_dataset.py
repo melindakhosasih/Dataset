@@ -168,6 +168,8 @@ def generate_dataset(args, type="train", n_epi=50):
                 vis_frames.append(frame)
 
                 step += 1
+                if step >= 500:
+                    raise ValueError("Can't reach goal!")
             
             scene_info["rgb"] = np.array(scene_info["rgb"])
             scene_info["depth"] = np.array(scene_info["depth"])

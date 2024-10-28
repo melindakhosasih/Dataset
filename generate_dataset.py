@@ -3,7 +3,6 @@ import os
 import argparse
 import numpy as np
 from omegaconf import OmegaConf
-from typing import TYPE_CHECKING, Union, cast
 from tqdm import tqdm
 
 import habitat
@@ -12,9 +11,6 @@ from habitat.config.default_structured_configs import (
     FogOfWarConfig,
     TopDownMapMeasurementConfig,
 )
-from habitat.core.agent import Agent
-from habitat.tasks.nav.nav import NavigationEpisode
-from habitat.tasks.nav.shortest_path_follower import ShortestPathFollower
 from habitat.utils.visualizations import maps
 from habitat_sim.utils.common import quat_to_coeffs
 from habitat.utils.visualizations.utils import (
@@ -27,42 +23,20 @@ from habitat.utils.visualizations.utils import (
 os.environ["MAGNUM_LOG"] = "quiet"
 os.environ["HABITAT_SIM_LOG"] = "quiet"
 
-if TYPE_CHECKING:
-    from habitat.core.simulator import Observations
-    from habitat.sims.habitat_simulator.habitat_simulator import HabitatSim
-
-# [example_4]
-class ShortestPathFollowerAgent(Agent):
-    r"""Implementation of the :ref:`habitat.core.agent.Agent` interface that
-    uses :ref`habitat.tasks.nav.shortest_path_follower.ShortestPathFollower` utility class
-    for extracting the action on the shortest path to the goal.
-    """
-
-    def __init__(self, env: habitat.Env, goal_radius: float):
-        self.env = env
-        self.shortest_path_follower = ShortestPathFollower(
-            sim=cast("HabitatSim", env.sim),
-            goal_radius=goal_radius,
-            return_one_hot=False,
-        )
-
-    def act(self, observations: "Observations") -> Union[int, np.ndarray]:
-        return self.shortest_path_follower.get_next_action(
-            cast(NavigationEpisode, self.env.current_episode).goals[0].position
-        )
-
-    def reset(self) -> None:
-        pass
-
 def check_corrupted(root_dir):
     for filename in tqdm(sorted(os.listdir(root_dir))):
         if ".npz" in filename:
             try:
                 path = os.path.join(root_dir, filename)
                 with np.load(path) as data:
-                    pass
+                    rgb, pos, rot = data["rgb"], data["pos"], data["rot"]
+                    depth, topdown, action = data["depth"], data["topdown"], data["action"]
             except Exception as e:
                 print(f"Error loading data from {path}: {e}")
+
+def convert_to_numpy(data):
+    for key in data:
+        data[key] = np.array(data[key])
 
 def generate_dataset(args, type="train", n_epi=50):
     save_dir = args.save_dir.format(split=type, dataset_name=args.dataset_name)
@@ -104,23 +78,13 @@ def generate_dataset(args, type="train", n_epi=50):
 
     # Create simulation environment
     with habitat.Env(config=config, dataset=dataset) as env:
-        # Create ShortestPathFollowerAgent agent
-        agent = ShortestPathFollowerAgent(
-            env=env,
-            goal_radius=config.habitat.task.measurements.success.success_distance,
-        )
-
-        for epi in tqdm(range(env.number_of_episodes)):
-            # Load the first episode and reset agent
-            obs = env.reset()
-            agent.reset()
+        for epi in (tqdm(range(env.number_of_episodes))):
+            _ = env.reset()
             current_episode = env.current_episode
-
             assert epi % n_epi == int(current_episode.episode_id), (
                 f"Episode {epi % n_epi} doesn't match with current epi {current_episode.episode_id}"
             )
 
-            step = 0
             scene_name, _ = os.path.splitext(os.path.basename(current_episode.scene_id))
             save_name = f"{scene_name}_{current_episode.episode_id.zfill(len(str(n_epi)))}"
             scene_info = {
@@ -131,41 +95,21 @@ def generate_dataset(args, type="train", n_epi=50):
                 "rot": [],
                 "topdown": [],
             }
-
-            # # Get metrics
-            info = env.get_metrics()
-            # Concatenate RGB-D observation and topdowm map into one image
-            frame = observations_to_image(obs, info)
-
-            if "top_down_map" in info:
-                top_down_map = maps.colorize_draw_agent_and_fit_to_height(
-                    info["top_down_map"], obs["rgb"].shape[0]
+            vis_frames = []
+            obs = env.sim.get_observations_at(current_episode.start_position, current_episode.start_rotation, True)
+            for step, path in enumerate(current_episode.shortest_paths[0]):
+                assert path.position == env.sim.get_agent_state().position.tolist(), (
+                    f"At step {step} position is not equal!", path.position, env.sim.get_agent_state().position.tolist()
                 )
+                assert path.rotation == quat_to_coeffs(env.sim.get_agent_state().rotation).tolist(), (
+                    f"At step {step} rotation is not equal!", path.rotation, quat_to_coeffs(env.sim.get_agent_state().rotation).tolist()
+                )
+                # Get action from dataset
+                action = path.action
 
-            # Remove top_down_map from metrics
-            info.pop("top_down_map")
-            # Overlay numeric metrics onto frame
-            frame = overlay_frame(frame, info)
-            # Add fame to vis_frames
-            vis_frames = [frame]
-            
-            # Repeat the steps above while agent doesn't reach the goal
-            while not env.episode_over:
-                # Get the next best action
-                action = agent.act(obs)
-                if action is None:
-                    break
-
-                scene_info["rgb"].append(obs["rgb"])
-                scene_info["depth"].append(obs["depth"])
-                scene_info["action"].append(action)
-                scene_info["pos"].append(env.sim.get_agent_state().position.tolist())
-                scene_info["rot"].append(quat_to_coeffs(env.sim.get_agent_state().rotation).tolist())
-                scene_info["topdown"].append(top_down_map)
-
-                # Step in the environment
-                obs = env.step(action)
+                # Get metrics
                 info = env.get_metrics()
+                # Concatenate RGB-D observation and topdowm map into one image
                 frame = observations_to_image(obs, info)
 
                 if "top_down_map" in info:
@@ -173,20 +117,33 @@ def generate_dataset(args, type="train", n_epi=50):
                         info["top_down_map"], obs["rgb"].shape[0]
                     )
 
+                # Remove top_down_map from metrics
                 info.pop("top_down_map")
+                # Overlay numeric metrics onto frame
                 frame = overlay_frame(frame, info)
+                # Add frame to vis_frames
                 vis_frames.append(frame)
 
-                step += 1
-                if step >= 500:
-                    raise ValueError("Can't reach goal!")
+                # Store info
+                scene_info["rgb"].append(obs["rgb"])
+                scene_info["depth"].append(obs["depth"])
+                scene_info["action"].append(action)
+                scene_info["pos"].append(env.sim.get_agent_state().position.tolist())
+                scene_info["rot"].append(quat_to_coeffs(env.sim.get_agent_state().rotation).tolist())
+                scene_info["topdown"].append(top_down_map)
+
+                obs = env.step(action)
+                assert step < 500, "Can't reach goal!"
             
-            scene_info["rgb"] = np.array(scene_info["rgb"])
-            scene_info["depth"] = np.array(scene_info["depth"])
-            scene_info["action"] = np.array(scene_info["action"])
-            scene_info["pos"] = np.array(scene_info["pos"])
-            scene_info["rot"] = np.array(scene_info["rot"])
-            scene_info["topdown"] = np.array(scene_info["topdown"])
+            # Store last step info
+            scene_info["rgb"].append(obs["rgb"])
+            scene_info["depth"].append(obs["depth"])
+            scene_info["action"].append(0)
+            scene_info["pos"].append(env.sim.get_agent_state().position.tolist())
+            scene_info["rot"].append(quat_to_coeffs(env.sim.get_agent_state().rotation).tolist())
+            scene_info["topdown"].append(top_down_map)
+
+            scene_info = convert_to_numpy(scene_info)
 
             np.savez_compressed(
                 os.path.join(save_dir, f"{save_name}.npz"),

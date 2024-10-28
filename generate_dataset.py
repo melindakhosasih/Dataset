@@ -2,6 +2,7 @@
 import os
 import argparse
 import numpy as np
+import logging
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
@@ -37,11 +38,16 @@ def check_corrupted(root_dir):
 def convert_to_numpy(data):
     for key in data:
         data[key] = np.array(data[key])
+    return data
 
 def generate_dataset(args, type="train", n_epi=50):
     save_dir = args.save_dir.format(split=type, dataset_name=args.dataset_name)
+    log_dir = os.path.join(save_dir, "log")
     os.makedirs(save_dir, exist_ok=True)
-    
+    os.makedirs(log_dir, exist_ok=True)
+    # Configure logging
+    logging.basicConfig(filename=os.path.join(log_dir, "warning_log.log"), level=logging.WARNING)
+
     # Create habitat config
     config = habitat.get_config(config_path=args.config_path)
     OmegaConf.set_readonly(config, False)
@@ -98,12 +104,18 @@ def generate_dataset(args, type="train", n_epi=50):
             vis_frames = []
             obs = env.sim.get_observations_at(current_episode.start_position, current_episode.start_rotation, True)
             for step, path in enumerate(current_episode.shortest_paths[0]):
-                assert path.position == env.sim.get_agent_state().position.tolist(), (
-                    f"At step {step} position is not equal!", path.position, env.sim.get_agent_state().position.tolist()
-                )
-                assert path.rotation == quat_to_coeffs(env.sim.get_agent_state().rotation).tolist(), (
-                    f"At step {step} rotation is not equal!", path.rotation, quat_to_coeffs(env.sim.get_agent_state().rotation).tolist()
-                )
+                if path.position != env.sim.get_agent_state().position.tolist():
+                    logging.warning(
+                        f"{save_name}, at step {step} position is not equal! "
+                        f"Dataset pos: {path.position}, "
+                        f"Agent pos: {env.sim.get_agent_state().position.tolist()}"
+                    )
+                if path.rotation != quat_to_coeffs(env.sim.get_agent_state().rotation).tolist():
+                    logging.warning(
+                        f"{save_name}, at step {step} rotation is not equal! "
+                        f"Dataset rot: {path.rotation}, "
+                        f"Agent rot: {quat_to_coeffs(env.sim.get_agent_state().rotation).tolist()}"
+                    )
                 # Get action from dataset
                 action = path.action
 

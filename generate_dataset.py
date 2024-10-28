@@ -1,11 +1,10 @@
 # [setup]
 import os
 import argparse
+import numpy as np
+from omegaconf import OmegaConf
 from typing import TYPE_CHECKING, Union, cast
 from tqdm import tqdm
-
-import matplotlib.pyplot as plt
-import numpy as np
 
 import habitat
 from habitat.config.default_structured_configs import (
@@ -60,9 +59,10 @@ def generate_dataset(args, type="train", n_epi=50):
     os.makedirs(save_dir, exist_ok=True)
     
     # Create habitat config
-    config = habitat.get_config(
-        config_path=args.config_path
-    )
+    config = habitat.get_config(config_path=args.config_path)
+    OmegaConf.set_readonly(config, False)
+    config.habitat.dataset.split = type
+    OmegaConf.set_readonly(config, True)
 
     # Add habitat.tasks.nav.nav.TopDownMap and habitat.tasks.nav.nav.Collisions measures
     with habitat.config.read_write(config):

@@ -162,20 +162,16 @@ def generate_pointnav_episode(
 
             shortest_paths = None
             if is_gen_shortest_path:
-                try:
-                    shortest_paths = [
-                        get_action_shortest_path(
-                            sim,
-                            source_position=source_position,
-                            source_rotation=source_rotation,
-                            goal_position=target_position,
-                            success_distance=shortest_path_success_distance,
-                            max_episode_steps=shortest_path_max_steps,
-                        )
-                    ]
-                # Throws an error when it can't find a path
-                except GreedyFollowerError:
-                    continue
+                shortest_paths = [
+                    get_action_shortest_path(
+                        sim,
+                        source_position=source_position,
+                        source_rotation=source_rotation,
+                        goal_position=target_position,
+                        success_distance=shortest_path_success_distance,
+                        max_episode_steps=shortest_path_max_steps,
+                    )
+                ]
             episode = _create_episode(
                 episode_id=episode_count,
                 scene_id=sim.habitat_config.scene,

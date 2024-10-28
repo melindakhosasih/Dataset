@@ -54,6 +54,16 @@ class ShortestPathFollowerAgent(Agent):
     def reset(self) -> None:
         pass
 
+def check_corrupted(root_dir):
+    for filename in tqdm(sorted(os.listdir(root_dir))):
+        if ".npz" in filename:
+            try:
+                path = os.path.join(root_dir, filename)
+                with np.load(path) as data:
+                    pass
+            except Exception as e:
+                print(f"Error loading data from {path}: {e}")
+
 def generate_dataset(args, type="train", n_epi=50):
     save_dir = args.save_dir.format(split=type, dataset_name=args.dataset_name)
     os.makedirs(save_dir, exist_ok=True)
@@ -188,6 +198,7 @@ def generate_dataset(args, type="train", n_epi=50):
                 vis_frames, save_dir, save_name, fps=6, quality=9
             )
             vis_frames.clear()
+    check_corrupted(save_dir)
 
 def parse_args():
     parser = argparse.ArgumentParser()

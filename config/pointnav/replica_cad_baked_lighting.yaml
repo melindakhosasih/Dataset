@@ -1,7 +1,7 @@
 # @package _global_
 
 defaults:
-  - pointnav/pointnav_base
+  - pointnav_base
   - _self_
 
 habitat:
@@ -31,4 +31,4 @@ habitat:
     scenes_dir: ""
     content_scenes:
     - "*"
-    data_path: scenes/replica_cad_baked_lighting/{split}/{split}.json.gz
+    data_path: pointnav/replica_cad_baked_lighting/{split}/{split}.json.gz

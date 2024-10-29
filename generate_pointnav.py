@@ -63,5 +63,5 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    for type, n_epi, seed in zip(["train", "val", "test"], [50, 5, 5], [500, 1000, 1500]):
+    for type, n_epi, seed in zip(["train", "val", "test"], [50, 50, 50], [500, 1000, 1500]):
         generate_pointnav(args, type, n_epi, seed)

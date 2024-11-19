@@ -186,3 +186,122 @@ def generate_pointnav_episode(
 
             episode_count += 1
             yield episode
+
+
+def generate_multigoal_pointnav_episode(
+    sim: "HabitatSim",
+    num_episodes: int = -1,
+    is_gen_shortest_path: bool = True,
+    shortest_path_success_distance: float = 0.2,
+    shortest_path_max_steps: int = 500,
+    closest_dist_limit: float = 1,
+    furthest_dist_limit: float = 30,
+    geodesic_to_euclid_min_ratio: float = 1.1,
+    number_retries_per_target: int = 10,
+    number_of_goals: int = 5,
+    min_steps: int = 300,
+) -> Generator[NavigationEpisode, None, None]:
+    r"""Generator function that generates PointGoal navigation episodes.
+
+    An episode is trivial if there is an obstacle-free, straight line between
+    the start and goal positions. A good measure of the navigation
+    complexity of an episode is the ratio of
+    geodesic shortest path position to Euclidean distance between start and
+    goal positions to the corresponding Euclidean distance.
+    If the ratio is nearly 1, it indicates there are few obstacles, and the
+    episode is easy; if the ratio is larger than 1, the
+    episode is difficult because strategic navigation is required.
+    To keep the navigation complexity of the precomputed episodes reasonably
+    high, we perform aggressive rejection sampling for episodes with the above
+    ratio falling in the range [1, 1.1].
+    Following this, there is a significant decrease in the number of
+    straight-line episodes.
+
+
+    :param sim: simulator with loaded scene for generation.
+    :param num_episodes: number of episodes needed to generate
+    :param is_gen_shortest_path: option to generate shortest paths
+    :param shortest_path_success_distance: success distance when agent should
+    stop during shortest path generation
+    :param shortest_path_max_steps maximum number of steps shortest path
+    expected to be
+    :param closest_dist_limit episode geodesic distance lowest limit
+    :param furthest_dist_limit episode geodesic distance highest limit
+    :param geodesic_to_euclid_min_ratio geodesic shortest path to Euclid
+    distance ratio upper limit till aggressive sampling is applied.
+    :return: navigation episode that satisfy specified distribution for
+    currently loaded into simulator scene.
+    """
+    episode_count = 0
+    while episode_count < num_episodes or num_episodes < 0:
+        print("Epi:", episode_count, end="\r")
+        target_list  = []
+        total_paths = None
+        next_position, next_rotation = None, None
+        goal_count = 0
+        while goal_count < number_of_goals or number_of_goals < 0:
+            target_position = sim.sample_navigable_point()
+
+            if sim.island_radius(target_position) < ISLAND_RADIUS_LIMIT:
+                continue
+
+            for _retry in range(number_retries_per_target):
+                if next_position is None:
+                    source_position = sim.sample_navigable_point()
+
+                is_compatible, dist = is_compatible_episode(
+                    source_position if next_position is None else next_position,
+                    target_position,
+                    sim,
+                    near_dist=closest_dist_limit,
+                    far_dist=furthest_dist_limit,
+                    geodesic_to_euclid_ratio=geodesic_to_euclid_min_ratio,
+                )
+                if is_compatible:
+                    break
+
+            if is_compatible:
+                if next_rotation is None:
+                    angle = np.random.uniform(0, 2 * np.pi)
+                    source_rotation = [0.0, np.sin(angle / 2), 0, np.cos(angle / 2)]
+
+                if is_gen_shortest_path:
+                    shortest_paths = [
+                        get_action_shortest_path(
+                            sim,
+                            source_position=source_position if next_position is None else next_position,
+                            source_rotation=source_rotation if next_rotation is None else next_rotation,
+                            goal_position=target_position,
+                            success_distance=shortest_path_success_distance,
+                            max_episode_steps=shortest_path_max_steps,
+                        )
+                    ]
+                
+                if total_paths is None:
+                    total_paths = shortest_paths
+                else:
+                    total_paths[0] += shortest_paths[0][1:]
+
+                target_list.append(target_position)
+                next_position = shortest_paths[0][-1].position
+                next_rotation = shortest_paths[0][-1].rotation
+                goal_count += 1
+
+                if len(total_paths[0]) >= min_steps:
+                    break
+
+        episode = _create_episode(
+            episode_id=episode_count,
+            scene_id=sim.habitat_config.scene,
+            scene_dataset_config=sim.habitat_config.scene_dataset,
+            start_position=source_position,
+            start_rotation=source_rotation,
+            # TODO: record all subgoals
+            # target_position=target_list,
+            target_position=target_position,
+            shortest_paths=total_paths,
+            radius=shortest_path_success_distance,
+            info={"geodesic_distance": dist},
+        )
+        episode_count += 1
+        yield episode

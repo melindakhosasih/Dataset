@@ -13,7 +13,10 @@ os.environ["MAGNUM_LOG"] = "quiet"
 os.environ["HABITAT_SIM_LOG"] = "quiet"
 
 def generate_pointnav(args, type, n_epi, seed):
-    data_path = args.data_path.format(split=type, dataset_name=args.dataset_name)
+    if args.multigoal:
+        data_path = args.data_path.format(split=type, dataset_name=f"{args.dataset_name}_multigoal")
+    else:
+        data_path = args.data_path.format(split=type, dataset_name=args.dataset_name)
     os.makedirs(os.path.dirname(data_path), exist_ok=True)
 
     config = habitat.get_config(config_path=args.config_path)
@@ -33,13 +36,24 @@ def generate_pointnav(args, type, n_epi, seed):
             # go to next scene
             env.reset()
             # generate point nav episode
-            generator = pointnav_generator.generate_pointnav_episode(
-                sim=env.sim,
-                num_episodes=n_epi,
-                shortest_path_success_distance=config.habitat.task.measurements.success.success_distance,
-                shortest_path_max_steps=config.habitat.environment.max_episode_steps,
-                closest_dist_limit=5,
-            )
+            if args.multigoal:
+                generator = pointnav_generator.generate_multigoal_pointnav_episode(
+                    sim=env.sim,
+                    num_episodes=n_epi,
+                    shortest_path_success_distance=config.habitat.task.measurements.success.success_distance,
+                    shortest_path_max_steps=config.habitat.environment.max_episode_steps,
+                    closest_dist_limit=3,
+                    number_of_goals=-1,
+                    min_steps=300,
+                )
+            else:
+                generator = pointnav_generator.generate_pointnav_episode(
+                    sim=env.sim,
+                    num_episodes=n_epi,
+                    shortest_path_success_distance=config.habitat.task.measurements.success.success_distance,
+                    shortest_path_max_steps=config.habitat.environment.max_episode_steps,
+                    closest_dist_limit=5,
+                )
             for episode in generator:
                 episodes.append(episode)
 
@@ -57,11 +71,12 @@ def parse_args():
     parser.add_argument("--config_path", type=str, default="./config/{dataset_name}.yaml")
     parser.add_argument("--data_path", type=str, default="pointnav/{dataset_name}/{split}/{split}.json.gz")
     parser.add_argument("--dataset_name", type=str, default="replica_cad_baked_lighting")
+    parser.add_argument("--multigoal", type=bool, default=False)
     args = parser.parse_args()
     args.config_path = args.config_path.format(dataset_name=args.dataset_name)
     return args
 
 if __name__ == "__main__":
     args = parse_args()
-    for type, n_epi, seed in zip(["train", "val", "test"], [50, 50, 50], [500, 1000, 1500]):
+    for type, n_epi, seed in zip(["train", "val", "test"], [1, 50, 50], [500, 1000, 1500]):
         generate_pointnav(args, type, n_epi, seed)

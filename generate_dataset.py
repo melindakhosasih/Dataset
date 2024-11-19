@@ -2,6 +2,7 @@ import os
 import argparse
 import numpy as np
 import logging
+from typing import TYPE_CHECKING, Union, cast
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
@@ -11,6 +12,9 @@ from habitat.config.default_structured_configs import (
     FogOfWarConfig,
     TopDownMapMeasurementConfig,
 )
+from habitat.core.agent import Agent
+from habitat.tasks.nav.nav import NavigationEpisode
+from habitat.tasks.nav.shortest_path_follower import ShortestPathFollower
 from habitat.utils.visualizations import maps
 from habitat_sim.utils.common import quat_to_coeffs
 from habitat.utils.visualizations.utils import (
@@ -22,6 +26,33 @@ from habitat.utils.visualizations.utils import (
 # Quiet the Habitat simulator logging
 os.environ["MAGNUM_LOG"] = "quiet"
 os.environ["HABITAT_SIM_LOG"] = "quiet"
+
+if TYPE_CHECKING:
+    from habitat.core.simulator import Observations
+    from habitat.sims.habitat_simulator.habitat_simulator import HabitatSim
+
+# [example_4]
+class ShortestPathFollowerAgent(Agent):
+    r"""Implementation of the :ref:`habitat.core.agent.Agent` interface that
+    uses :ref`habitat.tasks.nav.shortest_path_follower.ShortestPathFollower` utility class
+    for extracting the action on the shortest path to the goal.
+    """
+
+    def __init__(self, env: habitat.Env, goal_radius: float):
+        self.env = env
+        self.shortest_path_follower = ShortestPathFollower(
+            sim=cast("HabitatSim", env.sim),
+            goal_radius=goal_radius,
+            return_one_hot=False,
+        )
+
+    def act(self, observations: "Observations") -> Union[int, np.ndarray]:
+        return self.shortest_path_follower.get_next_action(
+            cast(NavigationEpisode, self.env.current_episode).goals[0].position
+        )
+
+    def reset(self) -> None:
+        pass
 
 def check_corrupted(root_dir):
     for filename in tqdm(sorted(os.listdir(root_dir))):
@@ -83,13 +114,19 @@ def generate_dataset(args, type="train", n_epi=50):
 
     # Create simulation environment
     with habitat.Env(config=config, dataset=dataset) as env:
-        for epi in (tqdm(range(env.number_of_episodes))):
-            _ = env.reset()
-            current_episode = env.current_episode
-            assert epi % n_epi == int(current_episode.episode_id), (
-                f"Episode {epi % n_epi} doesn't match with current epi {current_episode.episode_id}"
-            )
+        # Create ShortestPathFollowerAgent agent
+        agent = ShortestPathFollowerAgent(
+            env=env,
+            goal_radius=config.habitat.task.measurements.success.success_distance,
+        )
 
+        for epi in (tqdm(range(env.number_of_episodes))):
+            # Load the first episode and reset agent
+            obs = env.reset()
+            agent.reset()
+            current_episode = env.current_episode
+
+            step = 0
             scene_name, _ = os.path.splitext(os.path.basename(current_episode.scene_id))
             save_name = f"{scene_name}_{current_episode.episode_id.zfill(len(str(n_epi)))}"
             scene_info = {
@@ -100,51 +137,6 @@ def generate_dataset(args, type="train", n_epi=50):
                 "rot": [],
                 "topdown": [],
             }
-            vis_frames = []
-            step = 0
-            info = None
-            obs = env.sim.get_observations_at(current_episode.start_position, current_episode.start_rotation, True)
-
-            # while not env.episode_over:
-            for step, path in enumerate(current_episode.shortest_paths[0]):
-                assert step < 500, "Can't reach goal!"
-                assert path.position == env.sim.get_agent_state().position.tolist(), (
-                    f"At step {step} position is not equal!", path.position, env.sim.get_agent_state().position.tolist()
-                )
-                assert path.rotation == quat_to_coeffs(env.sim.get_agent_state().rotation).tolist(), (
-                    f"At step {step} rotation is not equal!", path.rotation, quat_to_coeffs(env.sim.get_agent_state().rotation).tolist()
-                )
-                # Get action from dataset
-                action = path.action
-
-                # Get metrics
-                info = env.get_metrics()
-                # Concatenate RGB-D observation and topdowm map into one image
-                frame = observations_to_image(obs, info)
-
-                if "top_down_map" in info:
-                    top_down_map = maps.colorize_draw_agent_and_fit_to_height(
-                        info["top_down_map"], obs["rgb"].shape[0]
-                    )
-
-                # Remove top_down_map from metrics
-                info.pop("top_down_map")
-                # Overlay numeric metrics onto frame
-                frame = overlay_frame(frame, info)
-                # Add frame to vis_frames
-                vis_frames.append(frame)
-
-                # Store info
-                scene_info["rgb"].append(obs["rgb"])
-                scene_info["depth"].append(obs["depth"])
-                scene_info["action"].append(action)
-                scene_info["pos"].append(env.sim.get_agent_state().position.tolist())
-                scene_info["rot"].append(quat_to_coeffs(env.sim.get_agent_state().rotation).tolist())
-                scene_info["topdown"].append(top_down_map)
-
-                obs = env.step(action)
-
-            assert len(vis_frames) > 1, "Can't navigate!"
 
             # Get metrics
             info = env.get_metrics()
@@ -160,17 +152,45 @@ def generate_dataset(args, type="train", n_epi=50):
             info.pop("top_down_map")
             # Overlay numeric metrics onto frame
             frame = overlay_frame(frame, info)
-            # Add frame to vis_frames
-            vis_frames.append(frame)
+            # Add fame to vis_frames
+            vis_frames = [frame]
 
-            # Store info
-            scene_info["rgb"].append(obs["rgb"])
-            scene_info["depth"].append(obs["depth"])
-            scene_info["action"].append(action)
-            scene_info["pos"].append(env.sim.get_agent_state().position.tolist())
-            scene_info["rot"].append(quat_to_coeffs(env.sim.get_agent_state().rotation).tolist())
-            scene_info["topdown"].append(top_down_map)
-            
+            # Repeat the steps above while agent doesn't reach the goal
+            while not env.episode_over:
+                # Get the next best action
+                action = agent.act(obs)
+                if action is None:
+                    break
+
+                scene_info["rgb"].append(obs["rgb"])
+                scene_info["depth"].append(obs["depth"])
+                scene_info["action"].append(action)
+                scene_info["pos"].append(env.sim.get_agent_state().position.tolist())
+                scene_info["rot"].append(quat_to_coeffs(env.sim.get_agent_state().rotation).tolist())
+                scene_info["topdown"].append(top_down_map)
+
+                # Step in the environment
+                obs = env.step(action)
+                info = env.get_metrics()
+                frame = observations_to_image(obs, info)
+
+                if "top_down_map" in info:
+                    top_down_map = maps.colorize_draw_agent_and_fit_to_height(
+                        info["top_down_map"], obs["rgb"].shape[0]
+                    )
+
+                # Remove top_down_map from metrics
+                info.pop("top_down_map")
+                # Overlay numeric metrics onto frame
+                frame = overlay_frame(frame, info)
+                # Add frame to vis_frames
+                vis_frames.append(frame)
+
+                step += 1
+                assert step < 500, "Can't reach goal!"
+
+            assert len(vis_frames) > 1, "Can't navigate!"
+
             scene_info = convert_to_numpy(scene_info)
 
             # Save scene info
@@ -188,14 +208,17 @@ def generate_dataset(args, type="train", n_epi=50):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config_path", type=str, default="./config/pointnav/{dataset_name}.yaml")
+    parser.add_argument("--config_path", type=str, default="./config/{dataset_name}.yaml")
     parser.add_argument("--dataset_name", type=str, default="replica_cad_baked_lighting")
     parser.add_argument("--save_dir", type=str, default="dataset/{dataset_name}/{split}/")
+    parser.add_argument("--multigoal", type=bool, default=False)
     args = parser.parse_args()
+    if args.multigoal:
+        args.dataset_name = f"{args.dataset_name}_multigoal"
     args.config_path = args.config_path.format(dataset_name=args.dataset_name)
     return args
 
 if __name__ == "__main__":
     args = parse_args()
-    for type, n_epi in zip(["train", "val", "test"], [50, 50, 50]):
+    for type, n_epi in zip(["val", "val", "test"], [50, 50, 50]):
         generate_dataset(args, type, n_epi)

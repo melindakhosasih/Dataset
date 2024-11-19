@@ -1,0 +1,34 @@
+# @package _global_
+
+defaults:
+  - pointnav_base
+  - _self_
+
+habitat:
+  seed: 500
+  environment:
+    iterator_options:
+      cycle: False
+      shuffle: False
+    max_episode_steps: 500
+  task:
+    measurements:
+      success:
+        success_distance: 0.2
+  simulator:
+    agents:
+      main_agent:
+        sim_sensors:
+          rgb_sensor:
+            width: 256
+            height: 256
+          depth_sensor:
+            width: 256
+            height: 256
+  dataset:
+    type: PointNav-v1
+    split: train
+    scenes_dir: ""
+    content_scenes:
+    - "*"
+    data_path: pointnav/replica_cad/{split}/{split}.json.gz
